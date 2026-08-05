@@ -1,5 +1,6 @@
 import type {
   AcceptedPlanDecompositionSummary,
+  CompanyPendingInteraction,
   AskUserQuestionsAnswer,
   Approval,
   CreateIssueTreeHold,
@@ -214,6 +215,8 @@ export const issuesApi = {
   },
   listInteractions: (id: string) =>
     api.get<IssueThreadInteraction[]>(`/issues/${id}/interactions`),
+  listCompanyPendingInteractions: (companyId: string) =>
+    api.get<CompanyPendingInteraction[]>(`/companies/${companyId}/interactions`),
   listAcceptedPlanDecompositions: (id: string) =>
     api.get<AcceptedPlanDecompositionSummary[]>(`/issues/${id}/accepted-plan-decompositions`),
   createInteraction: (id: string, data: Record<string, unknown>) =>

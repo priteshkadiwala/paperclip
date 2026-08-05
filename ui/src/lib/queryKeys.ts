@@ -205,6 +205,8 @@ export const queryKeys = {
     list: (companyId: string, status?: string) =>
       ["approvals", companyId, status] as const,
     detail: (approvalId: string) => ["approvals", "detail", approvalId] as const,
+    companyInteractions: (companyId: string) =>
+      ["approvals", "company-interactions", companyId] as const,
     comments: (approvalId: string) => ["approvals", "comments", approvalId] as const,
     issues: (approvalId: string) => ["approvals", "issues", approvalId] as const,
   },

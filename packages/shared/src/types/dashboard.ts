@@ -26,6 +26,7 @@ export interface DashboardSummary {
     monthUtilizationPercent: number;
   };
   pendingApprovals: number;
+  pendingInteractions: number;
   budgets: {
     activeIncidents: number;
     pendingApprovals: number;

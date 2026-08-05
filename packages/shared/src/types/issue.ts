@@ -1088,6 +1088,18 @@ export type IssueThreadInteraction =
   | RequestConfirmationInteraction
   | RequestCheckboxConfirmationInteraction;
 
+export interface CompanyPendingInteractionIssue {
+  id: string;
+  identifier: string | null;
+  title: string;
+  status: string;
+  assigneeAgentId: string | null;
+}
+
+export type CompanyPendingInteraction = IssueThreadInteraction & {
+  issue: CompanyPendingInteractionIssue;
+};
+
 export type IssueThreadInteractionPayload =
   | SuggestTasksPayload
   | AskUserQuestionsPayload

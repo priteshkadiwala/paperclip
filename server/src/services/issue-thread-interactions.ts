@@ -942,6 +942,32 @@ export function issueThreadInteractionService(db: Db) {
       return rows.map((row) => hydrateInteraction(row));
     },
 
+    listPendingForCompany: async (companyId: string) => {
+      const rows = await db
+        .select({
+          interaction: issueThreadInteractions,
+          issue: {
+            id: issues.id,
+            identifier: issues.identifier,
+            title: issues.title,
+            status: issues.status,
+            assigneeAgentId: issues.assigneeAgentId,
+          },
+        })
+        .from(issueThreadInteractions)
+        .innerJoin(issues, eq(issueThreadInteractions.issueId, issues.id))
+        .where(and(
+          eq(issueThreadInteractions.companyId, companyId),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id));
+
+      return rows.map((row) => ({
+        ...hydrateInteraction(row.interaction),
+        issue: row.issue,
+      }));
+    },
+
     getById: async (interactionId: string) => {
       const row = await db
         .select()

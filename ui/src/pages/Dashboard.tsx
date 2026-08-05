@@ -278,14 +278,16 @@ export function Dashboard() {
             />
             <MetricCard
               icon={ShieldCheck}
-              value={data.pendingApprovals + data.budgets.pendingApprovals}
+              value={data.pendingApprovals + data.budgets.pendingApprovals + (data.pendingInteractions ?? 0)}
               label="Pending Approvals"
               to="/approvals"
               description={
                 <span>
-                  {data.budgets.pendingApprovals > 0
-                    ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
-                    : "Awaiting board review"}
+                  {(data.pendingInteractions ?? 0) > 0
+                    ? `${data.pendingInteractions} agent ${data.pendingInteractions === 1 ? "question awaits" : "questions await"} your decision`
+                    : data.budgets.pendingApprovals > 0
+                      ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
+                      : "Awaiting board review"}
                 </span>
               }
             />

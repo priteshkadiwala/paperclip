@@ -733,6 +733,8 @@ export type {
   RequestConfirmationInteraction,
   RequestCheckboxConfirmationInteraction,
   IssueThreadInteraction,
+  CompanyPendingInteraction,
+  CompanyPendingInteractionIssue,
   IssueThreadInteractionPayload,
   IssueThreadInteractionResult,
   IssueDocument,

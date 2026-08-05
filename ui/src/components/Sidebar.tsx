@@ -19,6 +19,7 @@ import {
   Pin,
   MessagesSquare,
   GanttChartSquare,
+  ShieldCheck,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -30,6 +31,7 @@ import { SidebarStarredProjects } from "./SidebarStarredProjects";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
+import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -58,6 +60,15 @@ export function Sidebar() {
     refetchInterval: 10_000,
   });
   const liveRunCount = liveRuns?.length ?? 0;
+  const { data: dashboardSummary } = useQuery({
+    queryKey: queryKeys.dashboard(selectedCompanyId!),
+    queryFn: () => dashboardApi.summary(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const pendingApprovalsBadge =
+    (dashboardSummary?.pendingApprovals ?? 0) +
+    (dashboardSummary?.budgets.pendingApprovals ?? 0) +
+    (dashboardSummary?.pendingInteractions ?? 0);
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const showPipelines = experimentalSettings?.enablePipelines === true;
   // Streamlined left navigation (top-level Projects link + starred children) is
@@ -177,6 +188,13 @@ export function Sidebar() {
 
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
+          <SidebarNavItem
+            to="/approvals"
+            label="Approvals"
+            icon={ShieldCheck}
+            badge={pendingApprovalsBadge > 0 ? pendingApprovalsBadge : undefined}
+            badgeLabel="pending"
+          />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
           {showPipelines ? (
             <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />

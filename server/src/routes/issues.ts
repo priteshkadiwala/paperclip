@@ -4290,6 +4290,38 @@ export function issueRoutes(
     res.json(result);
   });
 
+  router.get("/companies/:companyId/interactions", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (req.actor.type === "agent") {
+      res.status(403).json({ error: "Agent actors cannot list issue-thread interactions through this board-only route" });
+      return;
+    }
+    const actor = getActorInfo(req);
+    const interactionSvc = issueThreadInteractionService(db);
+
+    // Apply the same superseded-by-comment catch-up the per-issue read performs,
+    // limited to issues that still show a pending gate, so the aggregate view
+    // never lists confirmations a later board comment already answered.
+    const candidates = await interactionSvc.listPendingForCompany(companyId);
+    const issuesWithPending = new Map(candidates.map((entry) => [entry.issue.id, entry.issue]));
+    for (const issue of issuesWithPending.values()) {
+      const expiredInteractions = await interactionSvc.expireRequestConfirmationsSupersededByHistoricalComments({
+        id: issue.id,
+        companyId,
+      });
+      await logExpiredRequestConfirmations({
+        issue: { id: issue.id, companyId, identifier: issue.identifier },
+        interactions: expiredInteractions,
+        actor,
+        source: "company.interactions.catchup_superseded_by_comment",
+      });
+    }
+
+    const interactions = await interactionSvc.listPendingForCompany(companyId);
+    res.json(interactions);
+  });
+
   router.post("/companies/:companyId/labels", validate(createIssueLabelSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
