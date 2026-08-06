@@ -1676,25 +1676,34 @@ export function issueThreadInteractionService(db: Db) {
       if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
         throw notFound("Interaction not found");
       }
-      if (current.kind !== "ask_user_questions") {
-        throw unprocessable("Only ask_user_questions interactions can be cancelled");
+      if (
+        current.kind !== "ask_user_questions"
+        && current.kind !== "request_confirmation"
+        && current.kind !== "request_checkbox_confirmation"
+      ) {
+        throw unprocessable("Only question and confirmation interactions can be cancelled");
       }
       if (current.status !== "pending") {
         throw conflict("Interaction has already been resolved");
       }
 
       const reason = data.reason?.trim() || null;
-      const [updated] = await db
-        .update(issueThreadInteractions)
-        .set({
-          status: "cancelled",
-          result: {
-            version: 1,
+      // Confirmation kinds keep result null on cancellation: their result schema
+      // has no cancelled outcome, and status alone carries the resolution.
+      const cancelledResult = current.kind === "ask_user_questions"
+        ? {
+            version: 1 as const,
             answers: [],
             cancelled: true,
             cancellationReason: reason,
             summaryMarkdown: null,
-          },
+          }
+        : null;
+      const [updated] = await db
+        .update(issueThreadInteractions)
+        .set({
+          status: "cancelled",
+          result: cancelledResult,
           resolvedByAgentId: actor.agentId ?? null,
           resolvedByUserId: actor.userId ?? null,
           resolvedAt: new Date(),
