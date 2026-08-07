@@ -1896,7 +1896,15 @@ function queueResolvedInteractionContinuationWakeup(input: {
     input.interaction.continuationPolicy === "wake_assignee_on_accept"
     && input.interaction.status !== "accepted"
   ) return;
-  if (input.interaction.status === "expired") return;
+  // A discarded question carries no decision for the assignee to act on, so it
+  // must not start a run. `expired` was already excluded; `cancelled` was not,
+  // which made withdrawing a gate dispatch the assignee exactly like accepting
+  // one. Cancelling five stale gates in one burst therefore spawned five
+  // concurrent sessions on the same issue (MEL-56, 2026-08-07). This also
+  // aligns the wake with RESOLVED_INTERACTION_CONTINUATION_STATUSES in
+  // heartbeat.ts, which has always treated only accepted/answered/rejected as
+  // meaningful resolutions.
+  if (input.interaction.status === "expired" || input.interaction.status === "cancelled") return;
   if (!input.issue.assigneeAgentId || isClosedIssueStatus(input.issue.status)) return;
 
   const forceFreshSession = input.forceFreshSession === true;

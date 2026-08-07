@@ -207,7 +207,7 @@ import {
   recoveryAssigneeAdapterOverrides,
   withRecoveryModelProfileHint,
 } from "./recovery/model-profile-hint.js";
-import { recoveryService } from "./recovery/service.js";
+import { ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS, recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
 import { resolveRequiredSuccessfulRunHandoffOnValidPath } from "./successful-run-handoff-state.js";
 import { taskWatchdogService } from "./task-watchdogs.js";
@@ -317,6 +317,15 @@ const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+/**
+ * Most concurrent runs one agent may hold on one issue before further wakes are
+ * held back instead of starting yet another adapter session. The execution-lock
+ * coalescer is the normal path; this is the backstop for when it fails open (no
+ * lock written, or the live run filtered out as a zombie). Runs that have gone
+ * silent past the output-watchdog threshold do not count, so a stale row cannot
+ * leave an issue permanently deaf.
+ */
+const ISSUE_LIVE_RUN_CEILING = 2;
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "interrupted", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
@@ -15998,6 +16007,132 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
             return { kind: "deferred" as const };
           }
+        }
+
+        // Reaching here means no execution lock pointed at a coalescable run,
+        // so this wake is about to start a fresh adapter session. That lock is
+        // absent more often than it looks: it is only written when a wake
+        // adopts a run, and a running-but-untracked process is filtered out as
+        // a zombie. This is therefore the path a burst of simultaneous wakes
+        // takes — MEL-56 (2026-08-07) started five concurrent Store Ops runs
+        // within 35 ms when five stale gates were cancelled at once.
+        //
+        // The issue row is locked FOR UPDATE at the top of this transaction, so
+        // sibling wakes serialize here and the reads below see every run a
+        // sibling has already committed.
+        const siblingIssueRuns = await tx
+          .select({
+            id: heartbeatRuns.id,
+            status: heartbeatRuns.status,
+            contextSnapshot: heartbeatRuns.contextSnapshot,
+            lastActivityAt: sql<Date | null>`coalesce(${heartbeatRuns.lastOutputAt}, ${heartbeatRuns.processStartedAt}, ${heartbeatRuns.startedAt}, ${heartbeatRuns.createdAt})`,
+          })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.companyId, agent.companyId),
+              eq(heartbeatRuns.agentId, agentId),
+              inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+            ),
+          )
+          .orderBy(desc(heartbeatRuns.createdAt));
+
+        // A queued sibling has not started a process yet, so folding this wake
+        // into it delivers the same information in one session instead of two.
+        // Safe where the zombie filter is not: there is no process to keep
+        // alive by refreshing the row.
+        const queuedSiblingRun = siblingIssueRuns.find((siblingRun) => siblingRun.status === "queued") ?? null;
+        if (queuedSiblingRun) {
+          const mergedSiblingRun = await tx
+            .update(heartbeatRuns)
+            .set({
+              contextSnapshot: mergeCoalescedContextSnapshot(
+                queuedSiblingRun.contextSnapshot,
+                enrichedContextSnapshot,
+              ),
+              updatedAt: new Date(),
+            })
+            .where(eq(heartbeatRuns.id, queuedSiblingRun.id))
+            .returning()
+            .then((rows) => rows[0] ?? null);
+
+          if (mergedSiblingRun) {
+            await tx.insert(agentWakeupRequests).values({
+              companyId: agent.companyId,
+              agentId,
+              source,
+              triggerDetail,
+              reason: "issue_execution_queued_sibling",
+              payload,
+              status: "coalesced",
+              coalescedCount: 1,
+              requestedByActorType: opts.requestedByActorType ?? null,
+              requestedByActorId: opts.requestedByActorId ?? null,
+              idempotencyKey: opts.idempotencyKey ?? null,
+              runId: mergedSiblingRun.id,
+            });
+
+            return { kind: "coalesced" as const, run: mergedSiblingRun };
+          }
+        }
+
+        // Backstop: cap concurrent sessions per agent per issue.
+        //
+        // Liveness here deliberately does NOT rely on `liveRunExecutions` alone.
+        // That map is in-memory and process-local, so a run this server did not
+        // spawn (restart, detached process) reads as a zombie — which is exactly
+        // how the coalescer above fails open and how the MEL-56 burst got
+        // through. A run that is still emitting output is alive no matter which
+        // process is tracking it, so fall back to the same durable signal the
+        // output watchdog uses. A genuinely dead row goes silent and ages out of
+        // the count, so stale rows cannot leave an issue permanently deaf.
+        const ceilingLivenessCutoff = new Date(Date.now() - ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS);
+        const liveSiblingRuns = siblingIssueRuns.filter((siblingRun) => {
+          if (siblingRun.status === "queued") return true;
+          if (siblingRun.status !== "running") return false;
+          if (liveRunExecutions.has(siblingRun.id)) return true;
+          const lastActivityAt = siblingRun.lastActivityAt ? new Date(siblingRun.lastActivityAt) : null;
+          return Boolean(lastActivityAt && lastActivityAt > ceilingLivenessCutoff);
+        });
+        if (liveSiblingRuns.length >= ISSUE_LIVE_RUN_CEILING) {
+          logger.warn(
+            {
+              companyId: agent.companyId,
+              agentId,
+              issueId: issue.id,
+              requestedReason: reason,
+              liveRunCount: liveSiblingRuns.length,
+              ceiling: ISSUE_LIVE_RUN_CEILING,
+            },
+            "issue live-run ceiling reached; holding wake instead of starting another session",
+          );
+
+          await tx.insert(agentWakeupRequests).values({
+            companyId: agent.companyId,
+            agentId,
+            source,
+            triggerDetail,
+            reason: "issue_live_run_ceiling",
+            payload: {
+              ...(payload ?? {}),
+              issueId,
+              heartbeatSkip: {
+                reason: "issue_live_run_ceiling",
+                requestedReason: reason,
+                liveRunCount: liveSiblingRuns.length,
+                ceiling: ISSUE_LIVE_RUN_CEILING,
+                liveRunIds: liveSiblingRuns.map((siblingRun) => siblingRun.id),
+              },
+            },
+            status: "skipped",
+            requestedByActorType: opts.requestedByActorType ?? null,
+            requestedByActorId: opts.requestedByActorId ?? null,
+            idempotencyKey: opts.idempotencyKey ?? null,
+            finishedAt: new Date(),
+          });
+
+          return { kind: "skipped" as const };
         }
 
         // PAP-13775: no live run holds the lock, so this wake would start a
