@@ -32,6 +32,7 @@ import {
   buildInvocationEnvForLogs,
   buildPaperclipEnv,
   ensureAbsoluteDirectory,
+  ensureNodeRuntimeOnPath,
   ensurePathInEnv,
   ensurePaperclipSkillSymlink,
   isForbiddenConfigEnvKey,
@@ -307,6 +308,43 @@ function geminiAcpCommandTokens(commandShell: string): string[] | null {
   if (path.basename(bin) !== "gemini") return null;
   if (!tokens.includes("--acp")) return null;
   return tokens;
+}
+
+/**
+ * acpx parses `--agent` with a shell-style splitter, so a bare command path
+ * containing a space is torn into a command plus stray args: an app installed
+ * at `/Applications/Paperclip Desktop.app/...` spawns `/Applications/Paperclip`
+ * and fails with ENOENT before the agent starts. The splitter does honour
+ * quotes, so quote a path that needs it.
+ *
+ * Only a path that exists on disk is quoted — a configured multi-word command
+ * such as `npx claude-agent-acp` must keep splitting into command plus args.
+ */
+export function quoteAgentCommandPath(command: string | null | undefined): string | null {
+  if (!command) return command ?? null;
+  const trimmed = command.trim();
+  if (!trimmed || !/\s/.test(trimmed)) return command;
+  if (/^["']/.test(trimmed)) return command;
+  try {
+    if (!fsSync.statSync(trimmed).isFile()) return command;
+  } catch {
+    return command; // Not a path we can vouch for; leave it to the splitter.
+  }
+  return `"${trimmed.replace(/(["\\])/g, "\\$1")}"`;
+}
+
+/**
+ * The ACP agent binary is spawned with this env, so it must be able to resolve
+ * the `node` its shebang names — see ensureNodeRuntimeOnPath. Applied here at
+ * the spawn boundary rather than on the adapter env itself so the session
+ * fingerprint and the logged env stay unchanged.
+ */
+function sessionSpawnEnv(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(ensureNodeRuntimeOnPath(env)).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
 }
 
 async function normalizeGeminiAcpCommandShell(commandShell: string, env: NodeJS.ProcessEnv): Promise<string> {
@@ -1187,7 +1225,7 @@ async function buildRuntime(input: {
   if (acpxAgent === "gemini" && agentCommandShell) {
     const normalized = await normalizeGeminiAcpCommandShell(
       agentCommandShell,
-      ensurePathInEnv({ ...process.env, ...env }),
+      ensureNodeRuntimeOnPath({ ...process.env, ...env }),
     );
     if (normalized !== agentCommandShell) {
       agentCommandShell = normalized;
@@ -1218,7 +1256,7 @@ async function buildRuntime(input: {
     }
   }
   const runtimeEnv = Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+    Object.entries(ensureNodeRuntimeOnPath({ ...process.env, ...env })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -1246,7 +1284,7 @@ async function buildRuntime(input: {
     await paperclipBridge?.stop().catch(() => {});
     throw err;
   }
-  const overrideCommand = processSessionBridge?.agentCommand ?? agentCommand;
+  const overrideCommand = quoteAgentCommandPath(processSessionBridge?.agentCommand ?? agentCommand);
   const overrides = overrideCommand ? { [acpxAgent]: overrideCommand } : undefined;
   const agentRegistry = createAgentRegistry({ overrides });
   const fingerprint = shortHash({
@@ -1982,7 +2020,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             mode: prepared.mode,
             cwd: prepared.cwd,
             resumeSessionId,
-            sessionOptions: { env: prepared.env },
+            sessionOptions: { env: sessionSpawnEnv(prepared.env) },
           });
         } catch (err) {
           if (!resumeSessionId || !isResumeFailure(err)) throw err;
@@ -1997,7 +2035,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             agent: prepared.acpxAgent,
             mode: prepared.mode,
             cwd: prepared.cwd,
-            sessionOptions: { env: prepared.env },
+            sessionOptions: { env: sessionSpawnEnv(prepared.env) },
           });
         }
       }

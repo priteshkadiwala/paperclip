@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
+import { accessSync, constants as fsConstants, promises as fs, statSync, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sanitizeRemoteExecutionEnv } from "./remote-execution-env.js";
@@ -2235,6 +2235,54 @@ export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (typeof env.PATH === "string" && env.PATH.length > 0) return env;
   if (typeof env.Path === "string" && env.Path.length > 0) return env;
   return { ...env, PATH: defaultPathForPlatform() };
+}
+
+function pathResolvesNodeRuntime(pathValue: string): boolean {
+  const binName = process.platform === "win32" ? "node.exe" : "node";
+  for (const segment of pathValue.split(path.delimiter)) {
+    if (!segment) continue;
+    const candidate = path.join(segment, binName);
+    try {
+      // statSync follows symlinks, so an npm/volta shim counts. The isFile
+      // check matters because X_OK also succeeds for a *directory* named
+      // "node" — traversable, but not an interpreter.
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, fsConstants.X_OK);
+      return true;
+    } catch {
+      // Segment has no usable Node; keep looking.
+    }
+  }
+  return false;
+}
+
+/**
+ * Guarantee the child can find a Node runtime on its PATH.
+ *
+ * Local ACP adapters are npm bin shims carrying a `#!/usr/bin/env node`
+ * shebang, and the engine now spawns them directly rather than through a
+ * generated shell script, so the kernel resolves that interpreter against the
+ * child's own PATH. A desktop app launched from Finder inherits the bare GUI
+ * PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which does not contain the Node that
+ * ships inside the app bundle — the spawn then fails with ENOENT before the
+ * adapter starts, surfacing only as `acpx_session_init_failed`.
+ *
+ * Prepend the directory of the currently running Node, but only when PATH
+ * cannot already resolve one, so hosts with their own Node keep using it.
+ */
+export function ensureNodeRuntimeOnPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const withPath = ensurePathInEnv(env);
+  const pathKey: "PATH" | "Path" =
+    typeof withPath.PATH === "string" || typeof withPath.Path !== "string" ? "PATH" : "Path";
+  const pathValue = withPath[pathKey] ?? "";
+  if (pathResolvesNodeRuntime(pathValue)) return withPath;
+
+  const runtimeDir = path.dirname(process.execPath);
+  if (!runtimeDir || pathValue.split(path.delimiter).includes(runtimeDir)) return withPath;
+  return {
+    ...withPath,
+    [pathKey]: pathValue ? `${runtimeDir}${path.delimiter}${pathValue}` : runtimeDir,
+  };
 }
 
 export async function ensureAbsoluteDirectory(
