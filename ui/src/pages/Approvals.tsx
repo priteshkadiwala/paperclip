@@ -15,6 +15,7 @@ import { CircleDot, ShieldCheck } from "lucide-react";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { IssueThreadInteractionCard } from "../components/IssueThreadInteractionCard";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { Badge } from "@/components/ui/badge";
 import type {
   AskUserQuestionsAnswer,
   AskUserQuestionsInteraction,
@@ -167,12 +168,12 @@ export function Approvals() {
         <Tabs value={statusFilter} onValueChange={(v) => navigate(`/approvals/${v}`)}>
           <PageTabBar items={[
             { value: "pending", label: <>Pending{pendingCount > 0 && (
-              <span className={cn(
-                "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+              <Badge variant="ghost" className={cn(
+                "ml-1.5 px-1.5 text-(length:--text-nano)",
                 "bg-yellow-500/20 text-yellow-500"
               )}>
                 {pendingCount}
-              </span>
+              </Badge>
             )}</> },
             { value: "all", label: "All" },
           ]} />
