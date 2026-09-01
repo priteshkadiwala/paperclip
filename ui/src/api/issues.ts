@@ -1,6 +1,5 @@
 import type {
   AcceptedPlanDecompositionSummary,
-  CompanyPendingInteraction,
   AskUserQuestionsAnswer,
   Approval,
   CompactIssue,
@@ -10,6 +9,7 @@ import type {
   FeedbackTrace,
   FeedbackVote,
   Issue,
+  IssueChanges,
   IssueAttachment,
   IssueCostSummary,
   IssueComment,
@@ -17,6 +17,8 @@ import type {
   IssueLabel,
   IssueRecoveryAction,
   IssueRetryNowResponse,
+  StalledReviewDecision,
+  StalledReviewDecisionResponse,
   IssueThreadInteraction,
   IssueTreeControlPreview,
   IssueTreeHold,
@@ -31,6 +33,8 @@ import { api, type RequestOptions } from "./client";
 
 export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
+  changes: IssueChanges;
+  blockedByIssueIds?: string[];
 };
 
 export type ResolveRecoveryActionResponse = {
@@ -162,6 +166,8 @@ export const issuesApi = {
     api.post<Issue>(`/companies/${companyId}/issues`, data),
   update: (id: string, data: Record<string, unknown>) =>
     api.patch<IssueUpdateResponse>(`/issues/${id}`, data),
+  decideStalledReview: (id: string, data: StalledReviewDecision) =>
+    api.post<StalledReviewDecisionResponse>(`/issues/${id}/stalled-review-decision`, data),
   resolveRecoveryAction: (
     id: string,
     data: {
@@ -233,8 +239,6 @@ export const issuesApi = {
   },
   listInteractions: (id: string) =>
     api.get<IssueThreadInteraction[]>(`/issues/${id}/interactions`),
-  listCompanyPendingInteractions: (companyId: string) =>
-    api.get<CompanyPendingInteraction[]>(`/companies/${companyId}/interactions`),
   listAcceptedPlanDecompositions: (id: string) =>
     api.get<AcceptedPlanDecompositionSummary[]>(`/issues/${id}/accepted-plan-decompositions`),
   createInteraction: (id: string, data: Record<string, unknown>) =>
